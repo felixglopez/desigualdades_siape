@@ -1,0 +1,812 @@
+---
+title: "Relatório de Desigualdades Remuneratórias no Executivo Civil Federal"
+author: "Felix G. Lopez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: cosmo
+  word_document:
+    toc: true
+fontsize: 10pt
+lang: pt-BR
+encoding: UTF-8
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 9,
+  fig.height = 6,
+  dpi = 300
+)
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(janitor)
+library(stringr)
+library(scales)
+library(knitr)
+library(forcats)
+library(broom)
+```
+
+# 1. Introdução
+
+Esta seção apresenta uma análise exploratória das desigualdades remuneratórias no Executivo Civil Federal brasileiro de 2022 e 2025, com foco na distribuição de rendimentos dentro de grupos ocupacionais classificados segundo a tipologia `classificacao_ipea2026`.
+
+As medidas centrais, nesta seção, são os **coeficientes de Gini**, indicador clássico de desigualdade distributiva, no qual valores mais próximos de zero indicam maior igualdade e valores mais elevados sugerem maior concentração interna dos rendimentos. Adota-se também estatísticas básicas, tais como intervaloes interquartis, médias e medianas.
+
+# 2. Leitura da base
+
+```{r leitura}
+siape_raw <- read_excel("siape_mgi_cargos_ipea_totais_gini_2022_a_2025.xlsx")
+nomes_originais <- names(siape_raw)
+
+siape <- siape_raw %>%
+  clean_names() %>%
+  rename(
+    gini = coeficiente_geni
+  )
+
+nomes_limpos <- names(siape)
+```
+
+# 3. Diagnóstico dos nomes das colunas
+
+## Nomes originais
+
+```{r nomes-originais}
+tibble(colunas_originais = nomes_originais) %>%
+  kable()
+```
+
+## Nomes após padronização com `clean_names()`
+
+```{r nomes-limpos}
+tibble(colunas_limpas = nomes_limpos) %>%
+  kable()
+```
+
+# 4. Checagem automática das colunas
+
+```{r checagem-colunas}
+# função auxiliar para localizar colunas por nome exato ou padrão
+achar_coluna <- function(nomes, candidatos = NULL, padrao = NULL) {
+  if (!is.null(candidatos)) {
+    achadas <- candidatos[candidatos %in% nomes]
+    if (length(achadas) > 0) return(achadas[1])
+  }
+  if (!is.null(padrao)) {
+    achadas <- nomes[stringr::str_detect(nomes, padrao)]
+    if (length(achadas) > 0) return(achadas[1])
+  }
+  return(NA_character_)
+}
+
+mapa_colunas <- tibble(
+  variavel_analitica = c(
+    "ano", "mes", "grupo", "gini", "servidores", "vinculos", "qtde_cargos",
+    "media_vr_rendim", "perc25_vr_rendim", "perc50_vr_rendim",
+    "perc75_vr_rendim", "maximo_vr_rendim"
+  ),
+  coluna_encontrada = c(
+    achar_coluna(nomes_limpos, candidatos = c("ano")),
+    achar_coluna(nomes_limpos, candidatos = c("mes")),
+    achar_coluna(nomes_limpos, candidatos = c("classificacao_ipea2026", "grupo")),
+    achar_coluna(nomes_limpos, candidatos = c("coeficiente_geni", "gini"), padrao = "geni|gini"),
+    achar_coluna(nomes_limpos, candidatos = c("servidores")),
+    achar_coluna(nomes_limpos, candidatos = c("vinculos")),
+    achar_coluna(nomes_limpos, candidatos = c("qtde_cargos", "quantidade_cargos"), padrao = "cargos"),
+    achar_coluna(nomes_limpos, candidatos = c("media_vr_rendim"), padrao = "^media_.*vr_rendim$"),
+    achar_coluna(nomes_limpos, candidatos = c("perc25_vr_rendim"), padrao = "^perc25_.*vr_rendim$"),
+    achar_coluna(nomes_limpos, candidatos = c("perc50_vr_rendim"), padrao = "^perc50_.*vr_rendim$"),
+    achar_coluna(nomes_limpos, candidatos = c("perc75_vr_rendim"), padrao = "^perc75_.*vr_rendim$"),
+    achar_coluna(nomes_limpos, candidatos = c("maximo_vr_rendim"), padrao = "^maximo_.*vr_rendim$")
+  )
+)
+
+kable(mapa_colunas)
+```
+
+## Colunas ausentes
+
+```{r colunas-ausentes}
+faltantes <- mapa_colunas %>%
+  filter(is.na(coluna_encontrada))
+
+if (nrow(faltantes) == 0) {
+  cat("Todas as colunas essenciais foram localizadas com sucesso.")
+} else {
+  cat("As seguintes variáveis analíticas não foram localizadas automaticamente:\n\n")
+  knitr::kable(faltantes)
+}
+```
+
+```{r parar-se-faltar}
+obrigatorias <- c("ano", "grupo", "gini")
+faltantes_obrigatorias <- mapa_colunas %>%
+  filter(variavel_analitica %in% obrigatorias, is.na(coluna_encontrada))
+
+if (nrow(faltantes_obrigatorias) > 0) {
+  stop(
+    paste0(
+      "A base não contém colunas obrigatórias para a análise: ",
+      paste(faltantes_obrigatorias$variavel_analitica, collapse = ", "),
+      ". Verifique os nomes exibidos acima."
+    )
+  )
+}
+```
+
+# 5. Padronização interna dos nomes analíticos
+
+```{r renomear}
+# cria vetores nomeados para renomear dinamicamente
+renomear_para <- mapa_colunas %>%
+  filter(!is.na(coluna_encontrada)) %>%
+  select(variavel_analitica, coluna_encontrada) %>%
+  tibble::deframe()
+
+# renomear dinamicamente
+siape2 <- siape
+
+for (novo_nome in names(renomear_para)) {
+  nome_atual <- renomear_para[[novo_nome]]
+  if (novo_nome != nome_atual) {
+    names(siape2)[names(siape2) == nome_atual] <- novo_nome
+  }
+}
+
+siape <- siape2
+rm(siape2)
+
+tibble(colunas_finais = names(siape)) %>%
+  kable()
+```
+
+# 6. Estrutura geral da base
+
+```{r dimensoes}
+tibble(
+  Observacoes = nrow(siape),
+  Variaveis = ncol(siape),
+  Anos = dplyr::n_distinct(siape$ano),
+  Grupos = dplyr::n_distinct(siape$grupo)
+) %>%
+  kable()
+```
+
+# 7. Diagnóstico de completude
+
+```{r missing}
+siape %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(cols = everything(),
+               names_to = "variavel",
+               values_to = "n_missing") %>%
+  arrange(desc(n_missing)) %>%
+  kable()
+```
+
+
+
+
+# 8. Indicadores derivados
+
+
+```{r indicadores}
+colunas_derivadas_necessarias <- c(
+  "perc25_vr_remun", "perc50_vr_remun", "perc75_vr_remun",
+  "maximo_vr_remun", "media_vr_remun", "servidores"
+)
+
+disponiveis_derivadas <- colunas_derivadas_necessarias %in% names(siape)
+
+if (all(disponiveis_derivadas)) {
+  siape <- siape %>%
+    mutate(
+      razao_topo_base = perc75_vr_remun / perc25_vr_remun,
+      gap_interquartil = perc75_vr_remun - perc25_vr_remun,
+      premio_topo_mediana = maximo_vr_remun / perc50_vr_remun,
+      massa_salarial = media_vr_remun * servidores
+    )
+  
+  cat("Indicadores derivados criados com sucesso.")
+} else {
+  cat("Nem todos os indicadores derivados puderam ser criados. Colunas ausentes:\n\n")
+  tibble(
+    coluna_necessaria = colunas_derivadas_necessarias,
+    disponivel = disponiveis_derivadas
+  ) %>%
+    filter(!disponivel) %>%
+    kable()
+}
+```
+
+# 9. Total de vínculos por grupo
+
+```{r vinculos_2025}
+siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    total_vinculos = sum(vinculos, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(
+    x = forcats::fct_reorder(grupo, total_vinculos),
+    y = total_vinculos
+  )) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_text(
+    aes(label = scales::comma(total_vinculos, big.mark = ".")),
+    hjust = -0.1,
+    size = 3.5
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = scales::comma_format(big.mark = "."),
+    expand = expansion(mult = c(0, 0.12))
+  ) +
+  labs(
+    title = "Total de vínculos por grupo ocupacional (2025)",
+    x = NULL,
+    y = "Total de vínculos"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+
+# 12 A1 boxplots
+
+Os boxplots da remuneração em 2025 evidenciam heterogeneidade entre grupos ocupacionais e também dentro deles. Alguns segmentos combinam elevados níveis salariais com grande dispersão interna e máximos muito distantes do restante da distribuição, sugerindo estruturas hierárquicas fortemente estratificadas (em termos remuneratórios, pelo menos). Outros grupos apresentam caixas mais compactas, indicando remuneração mais homogênea e trajetórias salariais menos desiguais. O resultado confirma que a desigualdade remuneratória no setor público federal opera simultaneamente entre e dentro dos agrupamentos ocupacionais.
+
+No topo da estrutura remuneratória permanecem grupos como Gestão e Políticas Públicas, Economia e Finanças, Fiscalização e Controle, Carreiras Jurídicas, Ciência e Tecnologia e Carreiras de Inteligência. Esses segmentos apresentam medianas e quartis superiores elevados.
+
+Em posição intermediária situam-se grupos como Segurança Pública, Educação e Cultura, Regulação Econômica e Infraestrutura, Políticas de Trabalho, Previdência e Assistência Social, Militares e Agentes Políticos. 
+
+Na base da estrutura aparecem grupos como Administrativos, Tecnologia da Informação, Saúde, Apoio e Manutenção Técnicos, Serviços Auxiliares e Serviçagem, além dos cargos classificados como Obsoletos. Isso indica que funções operacionais, rotinas administrativas e parte das atividades de suporte institucional são remuneradas em patamar inferior ao núcleo tecnocrático estatal. Em outras palavras, a sustentação cotidiana da máquina pública repousa em grande medida sobre segmentos comparativamente menos valorizados.
+
+O gráfico também revela diferenças expressivas de desigualdade interna. Em Ciência e Tecnologia, por exemplo, a caixa é larga e o valor máximo bastante elevado, sugerindo coexistência de posições muito distintas dentro do mesmo agrupamento. É plausível que convivam nesse segmento carreiras técnicas médias, pesquisadores seniores, especialistas altamente titulados e funções estratégicas de direção científica. A desigualdade não decorre apenas do nível salarial médio, mas da heterogeneidade interna.
+
+Carreiras Jurídicas também exibem elevado nível remuneratório e forte distância entre o centro da distribuição e o topo. Isso sugere progressões relevantes, adicionais específicos e hierarquias internas robustas. O mesmo padrão aparece, em menor grau, em alguns grupos administrativos: embora a mediana seja mais modesta, a presença de máximos muito distantes indica que dentro de agregados administrativos convivem posições bastante distintas, possivelmente em razão da reunião de carreiras diversas sob uma mesma categoria ampla.
+
+Por outro lado, alguns grupos mostram caixas estreitas e menor dispersão relativa, o que sugere maior padronização salarial. Em segmentos dessa natureza, a remuneração tende a seguir trajetórias mais lineares e previsíveis, com menos diferenciação entre integrantes típicos do grupo. Isso pode refletir carreiras fortemente tabeladas ou menor presença de gratificações discricionárias.
+
+Um resultado substantivamente importante é que, mesmo excluindo Altos Dirigentes, o topo da estrutura salarial continua concentrado em carreiras permanentes especializadas, e não em posições estritamente políticas. Isso reforça a hipótese de que, no Executivo federal, os maiores prêmios remuneratórios estão mais associados à expertise institucionalizada do que aos cargos transitórios de comando.
+
+Esses achados qualificam o debate público sobre remuneração estatal. Generalizações sobre “o servidor público” ocultam forte heterogeneidade interna. Existem nichos altamente valorizados, amplas bases administrativas com remuneração intermediária ou baixa, e grupos em que a principal desigualdade decorre de elites internas muito distantes do restante dos servidores.
+
+Em síntese, excluídos os Altos Dirigentes, a evidência sugere que a estrutura remuneratória federal combina estratificação vertical entre grupos ocupacionais e fragmentação interna em segmentos específicos. Reformas orientadas à equidade precisam distinguir essas duas dimensões: reduzir desigualdades entre carreiras não é o mesmo que enfrentar concentração remuneratória dentro delas.
+
+
+```{r boxplot_remun_2025}
+siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    p25 = mean(perc25_vr_remun, na.rm = TRUE),
+    p50 = mean(perc50_vr_remun, na.rm = TRUE),
+    p75 = mean(perc75_vr_remun, na.rm = TRUE),
+    minimo = mean(minimo_vr_remun, na.rm = TRUE),
+    maximo = mean(maximo_vr_remun, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(
+    aes(
+      x = forcats::fct_reorder(grupo, p50),
+      ymin = minimo,
+      lower = p25,
+      middle = p50,
+      upper = p75,
+      ymax = maximo
+    )
+  ) +
+  geom_boxplot(
+    stat = "identity",
+    fill = "steelblue",
+    alpha = 0.35,
+    width = 0.65
+  ) +
+  coord_flip() +
+  scale_y_continuous(
+    labels = scales::comma_format(
+      big.mark = ".",
+      decimal.mark = ","
+    )
+  ) +
+  labs(
+    title = "Distribuição da remuneração por grupo ocupacional (2025)",
+    subtitle = "Boxplots construídos com mínimo, quartis, mediana e máximo",
+    x = NULL,
+    y = "Remuneração"
+  ) +
+  theme_minimal(base_size = 11)
+```
+
+
+
+
+# 9. Evolução agregada da desigualdade
+
+```{r gini-ano}
+gini_ano <- siape %>%
+  group_by(ano) %>%
+  summarise(
+    gini_medio = mean(gini, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(gini_ano)
+```
+
+```{r grafico-gini-ano}
+ggplot(gini_ano, aes(x = ano, y = gini_medio)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = sort(unique(gini_ano$ano))) +
+  labs(
+    title = "Coeficiente médio de Gini por ano",
+    x = "Ano",
+    y = "Gini médio"
+  ) +
+  theme_minimal()
+```
+
+# 10. Desigualdade por grupos ocupacionais
+
+## Gini em 2025
+
+```{r gini-2025}
+g2025 <- siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(gini = mean(gini, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(gini))
+
+kable(g2025)
+```
+
+```{r grafico-2025}
+ggplot(g2025, aes(x = fct_reorder(grupo, gini), y = gini)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Desigualdade interna por grupo ocupacional (2025)",
+    x = NULL,
+    y = "Coeficiente de Gini"
+  ) +
+  theme_minimal()
+```
+
+# 11. Comparação entre 2022 e 2025
+
+```{r comparacao}
+comparacao <- siape %>%
+  filter(ano %in% c(2022, 2025)) %>%
+  group_by(grupo, ano) %>%
+  summarise(gini = mean(gini, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(
+    names_from = ano,
+    values_from = gini,
+    names_prefix = "gini_"
+  ) %>%
+  mutate(
+    diferenca = gini_2025 - gini_2022,
+    diferenca_pct = (diferenca / gini_2022) * 100
+  ) %>%
+  arrange(desc(diferenca))
+
+kable(comparacao)
+```
+
+```{r grafico-comp}
+siape %>%
+  filter(ano %in% c(2022, 2025)) %>%
+  group_by(grupo, ano) %>%
+  summarise(gini = mean(gini, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(
+    x = fct_reorder(grupo, gini),
+    y = gini,
+    fill = factor(ano)
+  )) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Comparação do Gini entre 2022 e 2025",
+    x = NULL,
+    y = "Coeficiente de Gini",
+    fill = "Ano"
+  ) +
+  theme_minimal()
+```
+
+# 12. Comparação excluindo Altos Dirigentes
+
+```{r sem-altos}
+siape %>%
+  filter(
+    ano %in% c(2022, 2025),
+    str_to_lower(grupo) != "altos dirigentes"
+  ) %>%
+  group_by(grupo, ano) %>%
+  summarise(gini = mean(gini, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(
+    x = fct_reorder(grupo, gini),
+    y = gini,
+    fill = factor(ano)
+  )) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Comparação do Gini (sem Altos Dirigentes)",
+    x = NULL,
+    y = "Coeficiente de Gini",
+    fill = "Ano"
+  ) +
+  theme_minimal()
+```
+
+# 12A. Tabela com intervalos interquartis
+
+```{r tabela_quartis_2025}
+tabela_quartis_2025 <- siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    p25 = mean(perc25_vr_rendim, na.rm = TRUE),
+    p75 = mean(perc75_vr_rendim, na.rm = TRUE),
+    gap_rs = p75 - p25,
+    razao_quartil = p75 / p25,
+    gap_percentual = ((p75 - p25) / p25) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(gap_percentual)) %>%   # ordena pela coluna %
+  mutate(
+    p25 = scales::dollar(
+      p25,
+      prefix = "R$ ",
+      big.mark = ".",
+      decimal.mark = ","
+    ),
+    p75 = scales::dollar(
+      p75,
+      prefix = "R$ ",
+      big.mark = ".",
+      decimal.mark = ","
+    ),
+    gap_rs = scales::dollar(
+      gap_rs,
+      prefix = "R$ ",
+      big.mark = ".",
+      decimal.mark = ","
+    ),
+    razao_quartil = round(razao_quartil, 2),
+    gap_percentual = scales::percent(
+      gap_percentual / 100,
+      accuracy = 0.1,
+      decimal.mark = ","
+    )
+  ) %>%
+  rename(
+    Grupo = grupo,
+    `1º Quartil (P25)` = p25,
+    `3º Quartil (P75)` = p75,
+    `Diferença Absoluta` = gap_rs,
+    `Razão P75/P25` = razao_quartil,
+    `Diferença %` = gap_percentual
+  )
+
+knitr::kable(
+  tabela_quartis_2025,
+  caption = "Distância remuneratória entre quartis por grupo ocupacional (2025)",
+  align = c("l", "r", "r", "r", "c", "c")
+)
+```
+
+
+# 12B Grafico com intervalo interquartil (miolo) e base e topo
+
+
+```{r tabela_desigualdade_2025, results='asis'}
+cat('<div style="font-size:8pt;">')
+
+tabela_desigualdade_2025 <- siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    gini = mean(gini, na.rm = TRUE),
+    p25 = mean(perc25_vr_rendim, na.rm = TRUE),
+    p50 = mean(perc50_vr_rendim, na.rm = TRUE),
+    p75 = mean(perc75_vr_rendim, na.rm = TRUE),
+    maximo = mean(maximo_vr_rendim, na.rm = TRUE),
+
+    razao_p75_p25 = p75 / p25,
+    razao_max_p25 = maximo / p25,
+    razao_max_p50 = maximo / p50,
+
+    gap_p75_p25 = p75 - p25,
+    gap_max_p25 = maximo - p25,
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(razao_max_p25)) %>%
+  mutate(
+    gini = round(gini, 3),
+
+    p25 = scales::number(p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    p50 = scales::number(p50, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    p75 = scales::number(p75, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    maximo = scales::number(maximo, big.mark = ".", decimal.mark = ",", accuracy = 1),
+
+    gap_p75_p25 = scales::number(gap_p75_p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    gap_max_p25 = scales::number(gap_max_p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+
+    razao_p75_p25 = round(razao_p75_p25, 2),
+    razao_max_p25 = round(razao_max_p25, 2),
+    razao_max_p50 = round(razao_max_p50, 2)
+  ) %>%
+  rename(
+    Grupo = grupo,
+    Gini = gini,
+    `P25` = p25,
+    `P50` = p50,
+    `P75` = p75,
+    `Máximo` = maximo,
+    `P75/P25` = razao_p75_p25,
+    `Máx/P25` = razao_max_p25,
+    `Máx/P50` = razao_max_p50,
+    `Gap P75-P25` = gap_p75_p25,
+    `Gap Máx-P25` = gap_max_p25
+  )
+
+knitr::kable(
+  tabela_desigualdade_2025,
+  caption = "Indicadores comparados de desigualdade remuneratória por grupo ocupacional (2025)",
+  align = c("l","c","r","r","r","r","c","c","c","r","r")
+)
+
+cat('</div>')
+```
+
+# Interpretação dos resultados.
+
+Os indicadores combinados (para 2025) permitem uma leitura mais rica da desigualdade remuneratória entre grupos ocupacionais do que o uso isolado do coeficiente de Gini. Em vez de captar apenas a concentração geral, a tabela separa três dimensões distintas: dispersão do núcleo da distribuição, distância entre base e topo extremo e heterogeneidade relativa entre segmentos.
+
+### O que revela o Gini
+
+Os grupos com maior coeficiente de Gini são aqueles em que a remuneração está mais concentrada internamente. Isso indica maior desigualdade entre integrantes do mesmo agrupamento ocupacional. Em termos substantivos, tende a refletir as seguintes características: 
+
+* coexistência de cargos muito distintos no mesmo grupo;
+* progressões remuneratórias assimétricas;
+* presença simultânea de posições básicas e cargos de comando.
+
+Já grupos com Gini menor tendem a apresentar carreiras mais lineares e tabeladas.
+
+### O que revela a razão P75/P25
+
+A razão **P75/P25** mostra quantas vezes o rendimento do terceiro quartil supera o do primeiro quartil. Ela mede a desigualdade no “miolo” da distribuição, isto é, entre a base intermediária e o estrato superior típico, sem depender dos valores máximos. A interpretação é a de que 
+
+* Valores próximos de **1,3 a 1,6** sugerem compressão salarial.
+* Valores acima de **2** indicam dispersão importante.
+* Valores muito altos sugerem grupos internamente estratificados.
+
+Se alguns grupos exibem Gini moderado, mas P75/P25 elevado, isso indica desigualdade disseminada entre muitos membros, não apenas concentrada em poucos casos extremos.
+
+###  O que revela Máx/P25
+
+Este talvez seja o indicador mais substantivamente poderoso da tabela. Ele mostra quantas vezes o maior rendimento do grupo supera o primeiro quartil. Quando o valor é muito alto há indicativo de há elite salarial interna muito destacada;
+
+No setor público, isso frequentemente sinaliza estruturas hierárquicas fortes ou grupos que agregam posições muito heterogêneas.
+
+
+### Diferença entre Gap P75-P25 e Gap Máx-P25
+
+### Gap P75-P25
+
+Mostra a desigualdade monetária entre quartis típicos. É a dispersão ordinária do grupo.
+
+### Gap Máx-P25
+
+Mostra a distância entre o topo máximo e a base intermediária. Quando esse gap explode em relação ao gap interquartil, o grupo possui topo descolado.
+
+Assim, se um grupo tem um gap P75-P25 moderado e um gap Máx-P25 altíssimo, então a maioria recebe valores relativamente próximos, mas existe uma pequena elite muito distante.
+
+### Tipologia substantiva dos grupos
+
+A tabela normalmente permite identificar quatro tipos:
+
+### A. Carreiras homogêneas premium
+
+* Gini baixo
+* remuneração alta
+* quartis próximos
+* máximo não tão distante
+
+
+### Estruturas hierárquicas elitizadas
+
+* Gini alto
+* Máx/P25 muito alto
+* grande Gap Máx-P25
+
+Sugere comando concentrado no topo.
+
+### Grupos massivos e fragmentados
+
+* Gini médio/alto
+* P75/P25 alto
+* topo não necessariamente extremo
+
+Sugere heterogeneidade difusa.
+
+### Base administrativa comprimida
+
+* baixos salários
+* baixa dispersão
+* pouca diferenciação interna
+
+## Implicação para o debate sobre desigualdade no setor público
+
+Os resultados mostram que a desigualdade estatal não ocorre apenas entre carreiras (grupo de gestão/advogados públicos vs administrativos, por exemplo), mas também dentro de grupos ocupacionais agregados. 
+
+## Principal conclusão provável
+
+Se os grupos ordenados por **Máx/P25** diferem bastante dos ordenados por Gini, isso indica que existem dois fenômenos distintos:
+
+1. desigualdade difusa entre muitos servidores;
+2. concentração extrema no topo.
+
+Essa distinção é crucial para políticas salariais.
+
+## 9. Formulação para relatório
+
+Os indicadores de 2025 sugerem que a desigualdade remuneratória no setor público federal assume formas distintas entre grupos ocupacionais. Em alguns segmentos, a dispersão salarial distribui-se ao longo de toda a estrutura interna; em outros, a principal característica é a existência de uma elite remuneratória muito distante do restante dos servidores. Isso indica que reformas voltadas à equidade devem distinguir desigualdade difusa de concentração no topo.
+
+## 10. Próximo passo analítico recomendado
+
+Cruzar esses indicadores com o tamanho dos grupos (`vinculos`) e com sua natureza ocupacional. Isso mostrará se a desigualdade está concentrada em grupos pequenos e estratégicos ou em segmentos massivos da burocracia.
+
+# 12 C Analisando uma tabela completa com dados de remuneração, em vez de rendimento
+
+```{r tabela_desigualdade_remun_2025, results='asis'}
+cat('<div style="font-size:8pt;">')
+
+tabela_desigualdade_remun_2025 <- siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    vinculos = sum(vinculos, na.rm = TRUE),
+
+    p25 = mean(perc25_vr_remun, na.rm = TRUE),
+    p50 = mean(perc50_vr_remun, na.rm = TRUE),
+    p75 = mean(perc75_vr_remun, na.rm = TRUE),
+    maximo = mean(maximo_vr_remun, na.rm = TRUE),
+
+    razao_p75_p25 = p75 / p25,
+    razao_max_p25 = maximo / p25,
+    razao_max_p50 = maximo / p50,
+
+    gap_p75_p25 = p75 - p25,
+    gap_max_p25 = maximo - p25,
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(vinculos)) %>%   # foco no peso quantitativo dos grupos
+  mutate(
+    vinculos = scales::comma(vinculos, big.mark = "."),
+    p25 = scales::number(p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    p50 = scales::number(p50, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    p75 = scales::number(p75, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    maximo = scales::number(maximo, big.mark = ".", decimal.mark = ",", accuracy = 1),
+
+    gap_p75_p25 = scales::number(gap_p75_p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+    gap_max_p25 = scales::number(gap_max_p25, big.mark = ".", decimal.mark = ",", accuracy = 1),
+
+    razao_p75_p25 = round(razao_p75_p25, 2),
+    razao_max_p25 = round(razao_max_p25, 2),
+    razao_max_p50 = round(razao_max_p50, 2)
+  ) %>%
+  rename(
+    Grupo = grupo,
+    `Vínculos` = vinculos,
+    `P25 Remun.` = p25,
+    `P50 Remun.` = p50,
+    `P75 Remun.` = p75,
+    `Máximo` = maximo,
+    `P75/P25` = razao_p75_p25,
+    `Máx/P25` = razao_max_p25,
+    `Máx/P50` = razao_max_p50,
+    `Gap P75-P25` = gap_p75_p25,
+    `Gap Máx-P25` = gap_max_p25
+  )
+
+knitr::kable(
+  tabela_desigualdade_remun_2025,
+  caption = "Desigualdade da remuneração e peso dos grupos ocupacionais (2025)",
+  align = c("l","r","r","r","r","r","c","c","c","r","r")
+)
+
+cat('</div>')
+```
+
+
+
+# 13. Rendimento médio e desigualdade
+
+```{r dispersao, eval="media_vr_rendim" %in% names(siape)}
+siape %>%
+  filter(ano == 2025) %>%
+  group_by(grupo) %>%
+  summarise(
+    gini = mean(gini, na.rm = TRUE),
+    rendimento = mean(media_vr_rendim, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = rendimento, y = gini, label = grupo)) +
+  geom_point(size = 3, alpha = 0.18) +
+  geom_text(
+    check_overlap = TRUE,
+    nudge_y = 0.01,
+    vjust = 0,
+    size = 3
+  ) +
+  labs(
+    title = "Rendimento médio e desigualdade intragrupo (2025)",
+    x = "Rendimento médio",
+    y = "Coeficiente de Gini"
+  ) +
+  theme_minimal()
+```
+
+
+# 14. Modelo estatístico exploratório
+
+```{r modelo, eval=all(c("media_vr_rendim", "servidores", "qtde_cargos") %in% names(siape))}
+modelo <- lm(
+  gini ~ media_vr_rendim + servidores + qtde_cargos + factor(ano),
+  data = siape
+)
+
+broom::tidy(modelo) %>%
+  kable()
+```
+
+# 15. Principais achados
+
+```{r texto}
+g22 <- gini_ano %>% filter(ano == 2022) %>% pull(gini_medio)
+g25 <- gini_ano %>% filter(ano == 2025) %>% pull(gini_medio)
+
+cat(
+  paste0(
+    "Entre 2022 e 2025, o coeficiente médio de Gini variou de ",
+    scales::number(g22, accuracy = 0.001, decimal.mark = ","),
+    " para ",
+    scales::number(g25, accuracy = 0.001, decimal.mark = ","),
+    "."
+  )
+)
+```
+
+Os resultados sugerem heterogeneidade relevante entre grupos ocupacionais. Alguns segmentos concentram rendimentos em grau superior aos demais, e a desigualdade interna não coincide necessariamente com maiores médias salariais. Em conjunto, os dados sugerem que a estrutura remuneratória estatal combina regras padronizadas com bolsões de forte dispersão interna.
+
+# 16. Conclusão
+
+A desigualdade no setor público federal não ocorre apenas entre carreiras, mas também dentro delas. O monitoramento sistemático do coeficiente de Gini por grupos ocupacionais permite identificar distorções distributivas, mudanças institucionais e trajetórias diferenciadas entre segmentos da burocracia estatal.
+
+Esse tipo de evidência pode subsidiar debates sobre desenho de carreiras, política remuneratória, incentivos e racionalização administrativa.
+
+# 17. Exportação opcional
+
+```{r exportar, eval=FALSE}
+write.csv(comparacao, "comparacao_gini_2022_2025.csv", row.names = FALSE)
+ggsave("grafico_gini_2025.png", width = 9, height = 6, dpi = 300)
+```
