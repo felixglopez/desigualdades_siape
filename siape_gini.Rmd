@@ -276,15 +276,7 @@ Na base da estrutura aparecem grupos como Administrativos, Tecnologia da Informa
 
 O gráfico também revela diferenças expressivas de desigualdade interna. Em Ciência e Tecnologia, por exemplo, a caixa é larga e o valor máximo bastante elevado, sugerindo coexistência de posições muito distintas dentro do mesmo agrupamento. É plausível que convivam nesse segmento carreiras técnicas médias, pesquisadores seniores, especialistas altamente titulados e funções estratégicas de direção científica. A desigualdade não decorre apenas do nível salarial médio, mas da heterogeneidade interna.
 
-Carreiras Jurídicas também exibem elevado nível remuneratório e forte distância entre o centro da distribuição e o topo. Isso sugere progressões relevantes, adicionais específicos e hierarquias internas robustas. O mesmo padrão aparece, em menor grau, em alguns grupos administrativos: embora a mediana seja mais modesta, a presença de máximos muito distantes indica que dentro de agregados administrativos convivem posições bastante distintas, possivelmente em razão da reunião de carreiras diversas sob uma mesma categoria ampla.
-
-Por outro lado, alguns grupos mostram caixas estreitas e menor dispersão relativa, o que sugere maior padronização salarial. Em segmentos dessa natureza, a remuneração tende a seguir trajetórias mais lineares e previsíveis, com menos diferenciação entre integrantes típicos do grupo. Isso pode refletir carreiras fortemente tabeladas ou menor presença de gratificações discricionárias.
-
-Um resultado substantivamente importante é que, mesmo excluindo Altos Dirigentes, o topo da estrutura salarial continua concentrado em carreiras permanentes especializadas, e não em posições estritamente políticas. Isso reforça a hipótese de que, no Executivo federal, os maiores prêmios remuneratórios estão mais associados à expertise institucionalizada do que aos cargos transitórios de comando.
-
-Esses achados qualificam o debate público sobre remuneração estatal. Generalizações sobre “o servidor público” ocultam forte heterogeneidade interna. Existem nichos altamente valorizados, amplas bases administrativas com remuneração intermediária ou baixa, e grupos em que a principal desigualdade decorre de elites internas muito distantes do restante dos servidores.
-
-Em síntese, excluídos os Altos Dirigentes, a evidência sugere que a estrutura remuneratória federal combina estratificação vertical entre grupos ocupacionais e fragmentação interna em segmentos específicos. Reformas orientadas à equidade precisam distinguir essas duas dimensões: reduzir desigualdades entre carreiras não é o mesmo que enfrentar concentração remuneratória dentro delas.
+Carreiras Jurídicas também exibem elevado nível remuneratório e forte distância entre o centro da distribuição e o topo. Isso sugere progressões relevantes, adicionais específicos e hierarquias internas grandes. O mesmo padrão aparece, em menor grau, em alguns grupos administrativos: embora a mediana seja mais modesta, a presença de máximos muito distantes indica que dentro de agregados administrativos convivem posições bastante distintas, possivelmente em razão da reunião de carreiras diversas sob uma mesma categoria ampla.
 
 
 ```{r boxplot_remun_2025}
@@ -334,7 +326,7 @@ siape %>%
 
 
 
-# 9. Evolução agregada da desigualdade
+# 9. Índice de Gini no Executivo Federal (2022-2025)
 
 ```{r gini-ano}
 gini_ano <- siape %>%
@@ -366,7 +358,8 @@ ggplot(gini_ano, aes(x = ano, y = gini_medio)) +
 
 ```{r gini-2025}
 g2025 <- siape %>%
-  filter(ano == 2025) %>%
+  filter(ano == 2025,
+         grupo != "Altos Dirigêntes") %>%
   group_by(grupo) %>%
   summarise(gini = mean(gini, na.rm = TRUE), .groups = "drop") %>%
   arrange(desc(gini))
