@@ -1,5 +1,5 @@
 ---
-title: "Relatório de Análise das Desigualdades Remuneratórias no Executivo Civil Federal"
+title: "dRelatório de Análise das Desigualdades Remuneratórias no Executivo Civil Federal"
 author: "Felix G. Lopez"
 date: "`r Sys.Date()`"
 output:
