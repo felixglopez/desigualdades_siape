@@ -67,7 +67,7 @@ tibble(colunas_originais = nomes_originais) %>%
   kable()
 ```
 
-## Nomes após padronização com `clean_names()`
+## a Nomes após padronização com `clean_names()`
 
 ```{r nomes-limpos}
 tibble(colunas_limpas = nomes_limpos) %>%

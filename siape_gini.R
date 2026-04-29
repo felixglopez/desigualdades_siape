@@ -23,7 +23,7 @@ ggplot(
 
 
 #comparando 2022 e 2025
-```r id="s3qk9m"
+r id="s3qk9m"
 library(readxl)
 library(dplyr)
 library(ggplot2)
@@ -128,4 +128,4 @@ kable(
     format = "pipe",
     align = c("l", "c", "c", "c", "c")
 )
-```
+
